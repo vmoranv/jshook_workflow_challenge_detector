@@ -1,40 +1,16 @@
-function toolNode(id, toolName, options) {
-  return {
-    kind: 'tool',
-    id,
-    toolName,
-    input: options?.input,
-    retry: options?.retry,
-    timeoutMs: options?.timeoutMs,
-  };
-}
-function sequenceNode(id, steps) {
-  return { kind: 'sequence', id, steps };
-}
-function parallelNode(id, steps, maxConcurrency, failFast) {
-  return { kind: 'parallel', id, steps, maxConcurrency, failFast };
-}
-
+import { createWorkflow, SequenceNodeBuilder, } from '@jshookmcp/extension-sdk/workflow';
 const workflowId = 'workflow.challenge-detector.v1';
-
-const challengeDetectorWorkflow = {
-  kind: 'workflow-contract',
-  version: 1,
-  id: workflowId,
-  displayName: 'Challenge Detector',
-  description:
-    'Detects and classifies browser challenges: Cloudflare Turnstile/JS Challenge, hCaptcha, reCAPTCHA, DataDome, Akamai Bot Manager, PerimeterX, Kasada, and custom JS detection scripts — producing a challenge report with bypass difficulty assessment.',
-  tags: ['reverse', 'captcha', 'challenge', 'cloudflare', 'antibot', 'detection', 'turnstile', 'mission'],
-  timeoutMs: 8 * 60_000,
-  defaultMaxConcurrency: 4,
-
-  build(ctx) {
+export default createWorkflow(workflowId, 'Challenge Detector')
+    .description('Detects and classifies browser challenges: Cloudflare Turnstile/JS Challenge, hCaptcha, reCAPTCHA, DataDome, Akamai Bot Manager, PerimeterX, Kasada, and custom JS detection scripts — producing a challenge report with bypass difficulty assessment.')
+    .tags(['reverse', 'captcha', 'challenge', 'cloudflare', 'antibot', 'detection', 'turnstile', 'mission'])
+    .timeoutMs(8 * 60_000)
+    .defaultMaxConcurrency(4)
+    .buildGraph((ctx) => {
     const prefix = 'workflows.challengeDetector';
     const url = String(ctx.getConfig(`${prefix}.url`, 'https://example.com'));
     const waitUntil = String(ctx.getConfig(`${prefix}.waitUntil`, 'networkidle0'));
     const requestTail = Number(ctx.getConfig(`${prefix}.requestTail`, 50));
     const maxConcurrency = Number(ctx.getConfig(`${prefix}.parallel.maxConcurrency`, 4));
-
     const challengeProbeScript = `
 (function() {
   const challenges = {};
@@ -63,75 +39,64 @@ const challengeDetectorWorkflow = {
   challenges.bodyTextLength = document.body?.innerText?.length || 0;
   return challenges;
 })()`;
-
-    return sequenceNode('challenge-detector-root', [
-      // Phase 1: Network & Navigate
-      toolNode('enable-network', 'network_enable', { input: { enableExceptions: true } }),
-      toolNode('navigate', 'page_navigate', { input: { url, waitUntil } }),
-
-      // Phase 2: Challenge Probe
-      toolNode('probe-challenges', 'page_evaluate', {
+    const root = new SequenceNodeBuilder('challenge-detector-root');
+    root
+        // Phase 1: Network & Navigate
+        .tool('enable-network', 'network_enable', { input: { enableExceptions: true } })
+        .tool('navigate', 'page_navigate', { input: { url, waitUntil } })
+        // Phase 2: Challenge Probe
+        .tool('probe-challenges', 'page_evaluate', {
         input: { expression: challengeProbeScript },
-      }),
-
-      // Phase 3: Parallel Analysis
-      parallelNode(
-        'analyse-challenges',
-        [
-          toolNode('get-requests', 'network_get_requests', { input: { tail: requestTail } }),
-          toolNode('captcha-detect', 'captcha_detect', { input: {} }),
-          toolNode('search-challenge-scripts', 'search_in_scripts', {
+    })
+        // Phase 3: Parallel Analysis
+        .parallel('analyse-challenges', (p) => {
+        p.maxConcurrency(maxConcurrency)
+            .failFast(false)
+            .tool('get-requests', 'network_get_requests', { input: { tail: requestTail } })
+            .tool('captcha-detect', 'captcha_detect', { input: {} })
+            .tool('search-challenge-scripts', 'search_in_scripts', {
             input: { query: 'challenge,captcha,turnstile,datadome,akamai,perimeterx,kasada,botmanager', matchType: 'any' },
-          }),
-          toolNode('screenshot', 'page_screenshot', { input: { fullPage: true } }),
-          toolNode('detect-obfuscation', 'detect_obfuscation', { input: {} }),
-          toolNode('stealth-verify', 'stealth_verify', { input: { categories: 'webdriver,navigator,timing,canvas' } }),
-        ],
-        maxConcurrency,
-        false,
-      ),
-
-      // Phase 4: Response Analysis
-      toolNode('get-network-stats', 'network_get_stats', { input: {} }),
-      toolNode('get-cookies', 'page_get_cookies'),
-
-      // Phase 5: Evidence Recording
-      toolNode('create-evidence-session', 'instrumentation_session_create', {
+        })
+            .tool('screenshot', 'page_screenshot', { input: { fullPage: true } })
+            .tool('detect-obfuscation', 'detect_obfuscation', { input: {} })
+            .tool('stealth-verify', 'stealth_verify', { input: { categories: 'webdriver,navigator,timing,canvas' } });
+    })
+        // Phase 4: Response Analysis
+        .tool('get-network-stats', 'network_get_stats', { input: {} })
+        .tool('get-cookies', 'page_get_cookies')
+        // Phase 5: Evidence Recording
+        .tool('create-evidence-session', 'instrumentation_session_create', {
         input: {
-          name: `challenge-detection-${new Date().toISOString().slice(0, 10)}`,
-          metadata: { url, workflowId },
+            name: `challenge-detection-${new Date().toISOString().slice(0, 10)}`,
+            metadata: { url, workflowId },
         },
-      }),
-      toolNode('record-artifact', 'instrumentation_artifact_record', {
+    })
+        .tool('record-artifact', 'instrumentation_artifact_record', {
         input: {
-          type: 'challenge_detection_report',
-          label: `Challenge detection for ${url}`,
-          metadata: { url },
+            type: 'challenge_detection_report',
+            label: `Challenge detection for ${url}`,
+            metadata: { url },
         },
-      }),
-
-      // Phase 6: Session Insight
-      toolNode('emit-insight', 'append_session_insight', {
+    })
+        // Phase 6: Session Insight
+        .tool('emit-insight', 'append_session_insight', {
         input: {
-          insight: JSON.stringify({
-            status: 'challenge_detector_complete',
-            workflowId,
-            url,
-          }),
+            insight: JSON.stringify({
+                status: 'challenge_detector_complete',
+                workflowId,
+                url,
+            }),
         },
-      }),
-    ]);
-  },
-
-  onStart(ctx) {
+    });
+    return root;
+})
+    .onStart((ctx) => {
     ctx.emitMetric('workflow_runs_total', 1, 'counter', { workflowId, mission: 'challenge_detector', stage: 'start' });
-  },
-  onFinish(ctx) {
+})
+    .onFinish((ctx) => {
     ctx.emitMetric('workflow_runs_total', 1, 'counter', { workflowId, mission: 'challenge_detector', stage: 'finish' });
-  },
-  onError(ctx, error) {
+})
+    .onError((ctx, error) => {
     ctx.emitMetric('workflow_errors_total', 1, 'counter', { workflowId, mission: 'challenge_detector', stage: 'error', error: error.name });
-  },
-};
-
-export default challengeDetectorWorkflow;
+})
+    .build();
