@@ -1,6 +1,7 @@
 name: challenge-detector
 description: JSHook workflow for challenge-detector
 author: vmoranv
+source_repo: https://github.com/vmoranv/jshook_workflow_challenge_detector
 tags:
   - workflow
   - challenge-detector
