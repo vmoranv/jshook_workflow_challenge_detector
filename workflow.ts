@@ -1,13 +1,14 @@
 import {
-  createWorkflow,
+  defineWorkflow,
+  sequenceStep,
   type WorkflowExecutionContext,
-  SequenceNodeBuilder,
 } from '@jshookmcp/extension-sdk/workflow';
 
 const workflowId = 'workflow.challenge-detector.v1';
 
-export default createWorkflow(workflowId, 'Challenge Detector')
-  .description(
+export default defineWorkflow(workflowId, 'Challenge Detector', (workflow) =>
+  workflow
+.description(
     'Detects and classifies browser challenges: Cloudflare Turnstile/JS Challenge, hCaptcha, reCAPTCHA, DataDome, Akamai Bot Manager, PerimeterX, Kasada, and custom JS detection scripts — producing a challenge report with bypass difficulty assessment.',
   )
   .tags(['reverse', 'captcha', 'challenge', 'cloudflare', 'antibot', 'detection', 'turnstile', 'mission'])
@@ -49,7 +50,7 @@ export default createWorkflow(workflowId, 'Challenge Detector')
   return challenges;
 })()`;
 
-    const root = new SequenceNodeBuilder('challenge-detector-root');
+    return sequenceStep('challenge-detector-root', (root) => {
 
     root
       // Phase 1: Network & Navigate
@@ -105,7 +106,7 @@ export default createWorkflow(workflowId, 'Challenge Detector')
         },
       });
 
-    return root;
+    });
   })
   .onStart((ctx) => {
     ctx.emitMetric('workflow_runs_total', 1, 'counter', { workflowId, mission: 'challenge_detector', stage: 'start' });
@@ -116,4 +117,4 @@ export default createWorkflow(workflowId, 'Challenge Detector')
   .onError((ctx, error) => {
     ctx.emitMetric('workflow_errors_total', 1, 'counter', { workflowId, mission: 'challenge_detector', stage: 'error', error: error.name });
   })
-  .build();
+  );
